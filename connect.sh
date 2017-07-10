@@ -14,29 +14,41 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
+before=$(nmcli -t -f UUID connection show)
 ./get-bssid.sh "$1"
 if [[ $? -eq 0 ]]; then
     active=$(nmcli -f Name -t connection show --active)
     if [[ "$active" != "$1" ]]; then
         echo "Network already exists, simply bringing it up."
-        nmcli connection up $1 | grep -P "Error|Warning"; r=$?
+        nmcli connection up $1 |& grep -P "Error|Warning"; r=$?
     else
         echo "Connection is already active."
         r=1
     fi
 else
-    nmcli -w 5 device wifi connect "$1" | grep Error; r=$?
+    echo "Creating new connection to \"$1\""
+    nmcli -w 5 device wifi connect "$1" |& grep Error; r=$?
 fi
 
 if [[ $r -eq 0 ]]; then
     echo "Failed to connect to $1!"
-    nmcli connection delete "$1"
+    nmcli connection delete "$1" |& grep Error; q=$?
+    if [[ $q -eq 0 ]]; then
+        after=$(nmcli -t -f UUID connection show)
+        echo "Before: $before"
+        echo "After:  $after"
+        uuid=$(echo $after | sed -e "s/$(echo $before)//")
+        if [[ "$uuid" != "" ]]; then
+            echo "Deleting connection via $uuid"
+            nmcli connection delete $uuid
+        fi
+        exit $q
+    fi
     exit $r
 fi
 
 # Get the network name we just connected to.
-name=$(nmcli -f IN-USE,SSID device wifi list | grep '*' | tail -n +2 |
-    awk '{print $2}')
+name=$(nmcli -t -f IN-USE,SSID dev wifi list | grep '*' | awk -F: '{print $2}')
 echo "The network name is: $name"
 
 # Find all MAC addresses
