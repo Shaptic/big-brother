@@ -27,8 +27,6 @@ class Network(object):
         self.security = security.strip() if security else "???"
         self.clients = []
         self._location = None
-        if self.name not in IGNORE_SSIDS:
-            Network.networks.append(self)
 
     def __str__(self):
         return "<%s | %s[%s]>" % (self.mac, self.name, self.security)
@@ -126,7 +124,8 @@ def parse_csv(csvf, verbosity=0):
 
         fields = [row[idx] for idx in idxs]
         nw = Network(*fields)
-        networks.append(nw)
+        if nw.name not in IGNORE_SSIDS:
+            networks.append(nw)
 
         if verbosity >= 1:
             print "  -", nw
