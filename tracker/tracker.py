@@ -41,9 +41,10 @@ def write(v, *args):
 
 def run(cmd):
     writeln(3, cmd)
-    return sub.Popen(cmd, shell=True, stdout=sub.PIPE).communicate()
+    return sub.Popen(cmd, shell=True, stdout=sub.PIPE,
+        stderr=sub.PIPE).communicate()
 
-def main(operation):
+def scan(operation):
     if os.path.exists(operation):
         filename = operation
 
@@ -74,23 +75,41 @@ def main(operation):
         writeln(3, "Looking for %s/%s*.csv" % (path, name))
         files = sorted([fn for fn in os.listdir(path) \
             if fn.startswith(name) and fn.endswith(".csv")])
+        writeln(2, "Available files: %s" % repr(files))
         filename = os.path.join(path, files[-1])
 
     writeln(2, "Parsing network traffic from", filename)
 
-    networks = []
+    networks, clients = [], []
     with open(filename, "r") as csv:
         networks, clients = networkparser.parse_csv(csv)
         networks = networkparser.get_open_networks(networks)
+        networks = networkparser.filter_duplicate_names(networks)
 
+    joined_macs = set()
     for nw in networks:
         if nw.name == "n/a":
             writeln(2, "Skipping hidden SSID network:", nw.mac)
             continue
 
         writeln(1, "Connecting to open network:", nw.name)
-        stdout, _ = run("./connect.sh %s --forget" % (nw.mac.upper()))
-        writeln(2, "  ".join(stdout.split('\n')))
+        writeln(2, "  BSSID: %s" % nw.mac.upper())
+        writeln(2, "  Signal strength: %d%%" % nw.signal)
+
+        stdout, _ = run("./connect.sh %s --forget | %s" % (nw.mac.upper(),
+            'grep -iP \'^\s*([A-Fa-f\d]{2}:?){6}\''))
+
+        found_macs = set([x.strip() for x in stdout.split('\n') if x.strip()])
+        if not found_macs:
+            writeln(1, "  No clients on this network.")
+        else:
+            writeln(1, "  Found clients:")
+            writeln(1, "   ", "\n    ".join(found_macs))
+
+        joined_macs = joined_macs.union(found_macs)
+        writeln(1)
+
+    return joined_macs, set([c.mac for c in clients])
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=""
@@ -99,7 +118,12 @@ if __name__ == "__main__":
         "master server.")
     parser.add_argument("op", metavar="IFACE|FILENAME",
         help="either an interface to scan, or a capture file to process")
-    parser.add_argument("-v", default=1, action="count", help="output level (1-3)")
+    parser.add_argument("-i", "--interval", metavar="SEC", type=int, default=30,
+        help="specifies delay between vicinity scans")
+    parser.add_argument("-n", "--count", type=int, default=1,
+        help="specifies number of scan sequences to perform, 0 means infinite")
+    parser.add_argument("-v", default=1, action="count",
+        help="output level (1-3)")
     parser.add_argument("-q", "--quiet", action="store_true",
         help="stop all output, overriding -v")
     args = parser.parse_args()
@@ -120,4 +144,12 @@ if __name__ == "__main__":
         s.close()
         del s
 
-    main(args.op)
+    n = 0
+    while args.count == 0 or n < args.count:
+        joined_macs, unassoc_macs = scan(args.op)
+        n += 1
+
+        # Don't needlessly sleep on the last run
+        if n < args.count:
+            writeln(1, "Completed scan, %ds until the next one...\n" % args.interval)
+            time.sleep(args.interval)

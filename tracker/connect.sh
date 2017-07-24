@@ -14,6 +14,7 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
+# TODO: Sort by timestamp for better cleanup replacement.
 before=$(nmcli -t -f UUID connection show)
 ./get-bssid.sh "$1"
 if [[ $? -eq 0 ]]; then

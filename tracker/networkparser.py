@@ -21,15 +21,17 @@ API_URL = "https://www.googleapis.com/geolocation/v1/geolocate?key=%s" % API_KEY
 class Network(object):
     networks = []
 
-    def __init__(self, mac, name, security):
+    def __init__(self, mac, name, security, signal):
         self.mac = mac
         self.name = name.strip() if name else "n/a"
         self.security = security.strip() if security else "???"
+        self.signal = abs(int(signal))
         self.clients = []
         self._location = None
 
     def __str__(self):
-        return "<%s | %s[%s]>" % (self.mac, self.name, self.security)
+        return "<%s | %s[%s] | %s%%>" % (self.mac, self.name, self.security,
+            self.signal)
 
     def __repr__(self):
         return str(self)
@@ -116,8 +118,9 @@ def parse_csv(csvf, verbosity=0):
     #   - BSSID:    the MAC address of the AP.
     #   - ESSID:    the human-readable name of the AP (if any).
     #   - Privacy:  the security level of the AP (like WPA2, OPN, etc.)
+    #   - Power:    the signal strength of the AP (negative number)
     #
-    idxs = [columns.index(s) for s in ["BSSID", "ESSID", "Privacy"]]
+    idxs = [columns.index(s) for s in ["BSSID", "ESSID", "Privacy", "Power"]]
 
     for row in reader:
         if not row: break   # network section has ended
@@ -162,6 +165,22 @@ def get_open_networks(network_list):
     """
     return filter(lambda x: x.security == "OPN", network_list)
 
+def filter_duplicate_names(network_list, max_dupes=1):
+    filtered = collections.defaultdict(list)
+    for nw in network_list:
+        results = filtered[nw.name]
+
+        # We always add up to the maximum.
+        if len(results) < max_dupes:
+            results.append(nw)
+
+        # Otherwise, only add if it's a better network, replacing last.
+        elif nw.signal > max([n.signal for n in filtered[nw.name]]):
+            results[-1] = nw
+
+        filtered[nw.name] = sorted(results, key=lambda x: x.signal, reverse=True)
+
+    return sum(filtered.values(), [])
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=
