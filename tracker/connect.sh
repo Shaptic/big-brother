@@ -54,9 +54,10 @@ echo "The network name is: $name"
 
 # Find all MAC addresses
 gateway=$(ip route list | grep default | awk '{print $3}')
-echo "The subnet is: $gateway/24"
+echo "The subnet is: $gateway/16"
 
-nmap -sn $gateway/24 --min-parallelism 16 --host-timeout 2s |
+# TODO: Determine subnet automatically, from ip route?
+nmap -sn $gateway/16 --min-parallelism 16 --host-timeout 2s |
     grep "MAC Address:" | awk '{print $3}' | tr '[:upper:]' '[:lower:]'
 
 if [[ "$2" == "--forget" ]]; then

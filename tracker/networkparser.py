@@ -15,7 +15,12 @@ IGNORE_SSIDS = [
 
 API_KEY = ""
 with open(".keys") as f: API_KEY = f.read().strip()
+
+# https://developers.google.com/maps/documentation/geolocation/
 API_URL = "https://www.googleapis.com/geolocation/v1/geolocate?key=%s" % API_KEY
+
+# https://www.mylnikov.org/archives/1170
+BKP_URL = "http://api.mylnikov.org/geolocation/wifi?v=1.1&data=open&bssid=%s"
 
 
 class Network(object):
@@ -44,29 +49,70 @@ class Network(object):
     def accuracy(self):
         return self._location["accuracy"] if self._location else None
 
-    def get_location(self, verbosity=0):
-        def write(*args):
-            if verbosity <= 0: return
-            print ' '.join(args)
+    def get_location(self, fallback=False, verbosity=0):
+        """ Retrieves the location of this WiFi network based on the BSSID.
+
+        :fallback[=False]   specifies whether or not to use the IP address of
+                            the outbound request as a fallback for geolocation
+                            lookup, in case the WiFi address doesn't exist
+        :verbosity[=0]      specifies the detail of the output level
+
+        :returns            a dictionary with keys ["location", "accuracy"]
+        """
+        def write(v, *args):
+            if verbosity < v: return
+            print ' '.join([str(x) for x in args])
 
         args = json.dumps({
-            "considerIp": "false",
+            "considerIp": "false" if not fallback else "true",
             "wifiAccessPoints": [{ "macAddress": self.mac.lower()
         }]})
 
-        r = requests.post(API_URL, data=args,
+        # import pdb; pdb.set_trace()
+
+        write(3, "Request URL:", API_URL)
+        write(3, "  Params:", args)
+
+        response = requests.post(API_URL, data=args,
             headers={"Content-Type": "application/json"})
 
-        write("For network:", self.mac)
+        write(1, "For network:", self.mac)
 
-        if r.status_code == 404:
-            write("  No location found.")
-            return {"location": None, "accuracy": None}
+        result = {
+            "location": None,
+            "accuracy": None
+        }
 
-        j = r.json()
-        write("  Location: (%f, %f)" % (j["location"].values()))
-        write("  Accuracy: %0.4f" % (j["accuracy"]))
-        return j
+        if response.status_code == 404:
+            write(2, "  No location found from Google API.")
+
+            url = BKP_URL % self.mac.upper()
+            write(2, "  Trying backup API.")
+            write(3, "    Request URL:", url)
+
+            response = requests.get(url)
+            j = response.json()
+            write(3, "   ", j)
+
+            if j["result"] == 200:
+                result["location"] = {
+                    "lat": j["data"]["lat"],
+                    "lng": j["data"]["lon"]
+                }
+                result["accuracy"] = j["data"]["range"]
+
+        else:
+            j = response.json()
+            write(3, " ", j)
+            result = dict([ pair for pair in j.items() if pair[0] in result ])
+
+        if result["location"] is None:
+            write(1, "  No location found.")
+        else:
+            write(1, "  Location: (%f, %f)" % tuple(result["location"].values()))
+            write(1, "  Accuracy: %0.2fm" % (result["accuracy"]))
+
+        return result
 
 
 class Client(object):
@@ -187,20 +233,28 @@ if __name__ == "__main__":
         "Extracts all open networks from an airodump-ng capture file.")
     parser.add_argument("-f", "--filename", metavar="FNAME", help="capture to extract from")
     parser.add_argument("--address", metavar="BSSID", help="MAC address of AP to lookup")
-    parser.add_argument("--exclude", nargs="+", help="ESSIDs to exclude if found")
+    parser.add_argument("--exclude", dest="exclude", default=[],
+        metavar="ESSID(s)", nargs="+", help="network names to exclude, if found")
     parser.add_argument("-c", "--clients", action="store_true",
         help="include any clients that were found")
     parser.add_argument("--open", action="store_true",
         help="only return open network results")
     parser.add_argument("-l", "--location", dest="loc", action="store_true",
         help="include the location information for each network")
+    parser.add_argument("--fallback", action="store_true",
+        help="when combined with -l, specifies that geoip should also be used")
     parser.add_argument("-v", dest="v", default=0,
         action="count", help="configures level of output")
 
     args = parser.parse_args()
 
     if args.address:
-        Network(args.address).get_location()
+        # 04:DA:D2:1E:B2:02
+        loc = Network(args.address, "", "", 0).get_location(
+            fallback=args.fallback,
+            verbosity=args.v)
+
+        sys.exit(os.EX_DATAERR if loc["location"] is None else 0)
 
     elif args.filename:
         fname = args.filename
@@ -208,11 +262,11 @@ if __name__ == "__main__":
 
         if not os.path.exists(fname):
             print "The file '%s' does not exist." % args.filename
-            sys.exit(1)
+            sys.exit(os.EX_OSFILE)
 
         if os.path.splitext(fname)[1].lower() != ".csv":
             print "The file isn't in CSV format."
-            sys.exit(1)
+            sys.exit(os.EX_NOINPUT)
 
         with open(fname, "r") as f:
             nw, cli = parse_csv(f, args.v)
@@ -225,7 +279,7 @@ if __name__ == "__main__":
 
                 print "%s | %s[%s]" % (n.mac, n.name, n.security)
                 if args.loc:
-                    location = n.get_location(args.v)
+                    location = n.get_location(fallback=args.fallback, verbosity=args.v)
                     if not location or location["location"] is None:
                         print "  (no location found)"
                         continue
