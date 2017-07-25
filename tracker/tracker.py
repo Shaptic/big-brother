@@ -9,7 +9,7 @@ import networkparser
 
 
 CAPTURE_PREFIX = "captures/cap"
-SNIFFER_TIME = 8
+SNIFFER_TIME = 15
 VERBOSITY = 1   # 0: nothing, 1: normal, 2: extra, 3: all
 
 
@@ -30,6 +30,27 @@ class PromiscuousAdapter(object):
         run("./monitor.sh %s stop" % self.ifacemon)
 
 
+class Progress(object):
+    """ Prints a "completable" expression to stdout.
+
+    Example usage:
+
+        with Progress("Doing something"):
+            pass
+
+        >>> Doing something ... done.
+    """
+    def __init__(self, expr, verbosity):
+        self.expr = expr
+        self.v = verbosity
+
+    def __enter__(self):
+        write(self.v, self.expr, "... ")
+
+    def __exit__(self, *args):
+        writeln(self.v, "done.")
+
+
 def writeln(v, *args):
     args = list(args) + [ "\n" ]
     write(v, *args)
@@ -41,8 +62,11 @@ def write(v, *args):
 
 def run(cmd):
     writeln(3, cmd)
-    return sub.Popen(cmd, shell=True, stdout=sub.PIPE,
+    out = sub.Popen(cmd, shell=True, stdout=sub.PIPE,
         stderr=sub.PIPE).communicate()
+    writeln(3, "stdout:", out[0])
+    writeln(3, "stderr:", out[1])
+    return out
 
 def scan(operation):
     if os.path.exists(operation):
@@ -56,11 +80,12 @@ def scan(operation):
             run("screen -dmS dump sudo airodump-ng -o csv -w %s %s" % (
                 CAPTURE_PREFIX, mon))
 
-            write(1, "Running network sniffer.", )
+            msg = "Running network sniffer for %d more seconds..."
+            write(1, msg % SNIFFER_TIME, "\r")
             for i in xrange(SNIFFER_TIME):
-                write(1, '.')
+                write(1, msg % (SNIFFER_TIME - i), "\t\r")
                 time.sleep(1)
-            writeln(1)
+            writeln(1, msg % 0, "done.")
 
             run("screen -XS dump quit")
 
@@ -83,10 +108,10 @@ def scan(operation):
     networks, clients = [], []
     with open(filename, "r") as csv:
         networks, clients = networkparser.parse_csv(csv)
-        networks = networkparser.get_open_networks(networks)
+        networks = networkparser.filter_open_networks(networks)
         networks = networkparser.filter_duplicate_names(networks)
 
-    joined_macs = set()
+    macdump = {}    # dict -> { network: [ users ]}
     for nw in networks:
         if nw.name == "n/a":
             writeln(2, "Skipping hidden SSID network:", nw.mac)
@@ -105,11 +130,23 @@ def scan(operation):
         else:
             writeln(1, "  Found clients:")
             writeln(1, "   ", "\n    ".join(found_macs))
-
-        joined_macs = joined_macs.union(found_macs)
+            macdump[nw] = found_macs
         writeln(1)
 
-    return joined_macs, set([c.mac for c in clients])
+    return macdump, set([c.mac for c in clients])
+
+def transmit(master, network_dump, clients):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    with Progress("Connecting to master server, %s:%d", 2):
+        s.connect(master)
+
+    with Progress("Transmitting data from %d networks" % len(network_dump), 2):
+        for nw in network_dump:
+            payload = "%s|%s\x00" % (nw.bssid.replace(':', ''),
+                ';'.join(network_dump[nw]))
+            s.sendall(payload)
+
+    s.close()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=""
@@ -122,6 +159,8 @@ if __name__ == "__main__":
         help="specifies delay between vicinity scans")
     parser.add_argument("-n", "--count", type=int, default=1,
         help="specifies number of scan sequences to perform, 0 means infinite")
+    parser.add_argument("-t", "--timeout", type=int, default=SNIFFER_TIME,
+        help="specifies the amount of time to perform packet sniffing")
     parser.add_argument("-v", default=1, action="count",
         help="output level (1-3)")
     parser.add_argument("-q", "--quiet", action="store_true",
@@ -129,6 +168,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     VERBOSITY = args.v if not args.quiet else 0
+    SNIFFER_TIME = args.timeout
 
     # Check for root permissions by binding a socket to a protected port.
     try:
@@ -148,6 +188,8 @@ if __name__ == "__main__":
     while args.count == 0 or n < args.count:
         joined_macs, unassoc_macs = scan(args.op)
         n += 1
+
+        transmit(("localhost", 0XC1A), joined_macs, unassoc_macs)
 
         # Don't needlessly sleep on the last run
         if n < args.count:

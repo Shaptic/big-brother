@@ -30,7 +30,24 @@ class Network(object):
         self.mac = mac
         self.name = name.strip() if name else "n/a"
         self.security = security.strip() if security else "???"
-        self.signal = abs(int(signal))
+
+        #
+        # As per the airodump specification, -1 has a special meaning for
+        # networks:
+        #
+        #   If the BSSID PWR is -1, then the driver doesn't support signal level
+        #   reporting. If the PWR is -1 for a limited number of stations then
+        #   this is for a packet which came from the AP to the client but the
+        #   client transmissions are out of range for your card.
+        #
+        # Note: as the signal gets higher you get closer to the AP or the
+        # station, but it's a negative number so we need to invert the value.
+        #
+        if signal != "-1":
+            self.signal = 100 - abs(int(signal))
+        else:
+            self.signal = 0
+
         self.clients = []
         self._location = None
 
@@ -206,10 +223,15 @@ def parse_csv(csvf, verbosity=0):
     return networks, clients
 
 
-def get_open_networks(network_list):
+def filter_open_networks(network_list):
     """ Finds all of the networks with no security.
     """
     return filter(lambda x: x.security == "OPN", network_list)
+
+def filter_signal_threshold(network_list, min_sig, max_sig):
+    """ Filters all networks outside of a certain signal strength.
+    """
+    return filter(lambda x: x.signal >= min_sig and x.signal <= max_sig, network_list)
 
 def filter_duplicate_names(network_list, max_dupes=1):
     filtered = collections.defaultdict(list)
