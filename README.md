@@ -1,7 +1,6 @@
 # Big Brother #
 A proof-of-concept suite of scripts to track device locations via MAC
-addresses, based on [this blog post](https://shaptic.github.io/privacy
-/technical-experiment/).
+addresses, based on [this blog post](https://teapowered.dev/posts/mac-address-tracking).
 
 This set of scripts is made up of two components, one of which is a tracker
 module that monitors a particular location -- the intention is that there are
